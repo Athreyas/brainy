@@ -23,27 +23,31 @@ use vault::{Note, Vault};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Tab {
+    Home,
+    Projects,
     Memory,
-    Actions,
+    Runbooks,
     Calendar,
-    Search,
     Tasks,
     Bookmarks,
+    Search,
 }
 
 impl Tab {
     fn label(self) -> &'static str {
         match self {
+            Tab::Home => "Home",
+            Tab::Projects => "Projects",
             Tab::Memory => "Memory",
-            Tab::Actions => "Actions",
+            Tab::Runbooks => "Runbooks",
             Tab::Calendar => "Calendar",
-            Tab::Search => "Search",
             Tab::Tasks => "Tasks",
             Tab::Bookmarks => "Bookmarks",
+            Tab::Search => "Search",
         }
     }
-    fn all() -> [Tab; 6] {
-        [Tab::Memory, Tab::Actions, Tab::Calendar, Tab::Search, Tab::Tasks, Tab::Bookmarks]
+    fn all() -> [Tab; 8] {
+        [Tab::Home, Tab::Projects, Tab::Memory, Tab::Runbooks, Tab::Calendar, Tab::Tasks, Tab::Bookmarks, Tab::Search]
     }
 }
 
@@ -72,7 +76,7 @@ impl App {
         let tasks = tasks::fetch_tasks().unwrap_or_default();
         let bookmarks = bookmarks::load_bookmarks();
         Ok(App {
-            tab: Tab::Memory,
+            tab: Tab::Home,
             vault,
             tasks,
             bookmarks,
@@ -131,17 +135,75 @@ impl App {
         }
         rows
     }
+
+    /// Helpful notes: recently updated + non-daily + project/runbook-ish.
+    fn helpful_notes(&self) -> Vec<Note> {
+        let mut recent: Vec<&Note> = self.vault.notes.iter()
+            .filter(|n| !n.rel_path.starts_with("09-Planning/Daily/") && !n.rel_path.starts_with("_templates/"))
+            .collect();
+        recent.sort_by(|a, b| b.updated.cmp(&a.updated));
+        recent.into_iter().take(6).cloned().collect()
+    }
+
+    /// Resurfaced bookmarks: high-value categories first, deterministic by name.
+    /// date_added is mostly absent in Dia exports, so value = category weight.
+    fn resurfaced_bookmarks(&self) -> Vec<bookmarks::Bookmark> {
+        let weight = |c: &str| -> i32 {
+            match c {
+                "Home Lab / Infra" => 0,
+                "Google / Firebase / AI" => 1,
+                "Learning" => 2,
+                "Code / Dev" => 3,
+                _ => 4,
+            }
+        };
+        let mut scored: Vec<(i32, String, bookmarks::Bookmark)> = self.bookmarks.iter()
+            .map(|b| (weight(&bookmarks::categorize(b)), b.name.clone(), b.clone()))
+            .collect();
+        scored.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+        scored.into_iter().map(|(_, _, b)| b).take(3).collect()
+    }
+
+    /// Vault timeline: notes grouped by updated month.
+    fn timeline(&self) -> Vec<(String, Vec<Note>)> {
+        use std::collections::BTreeMap;
+        let mut map: BTreeMap<String, Vec<Note>> = BTreeMap::new();
+        for n in &self.vault.notes {
+            if n.rel_path.starts_with("_templates/") { continue; }
+            let key = n.updated.map(|d| d.format("%Y-%m").to_string()).unwrap_or_else(|| "no-date".into());
+            map.entry(key).or_default().push(n.clone());
+        }
+        let mut out: Vec<(String, Vec<Note>)> = map.into_iter().collect();
+        out.sort_by(|a, b| b.0.cmp(&a.0));
+        out
+    }
+
+    fn project_notes(&self) -> Vec<Note> {
+        self.vault.notes.iter()
+            .filter(|n| n.rel_path.starts_with("01-Projects/") && n.rel_path.ends_with(".md") && !n.rel_path.ends_with("AGENTS.md"))
+            .cloned()
+            .collect()
+    }
+
+    fn runbook_notes(&self) -> Vec<Note> {
+        self.vault.notes.iter()
+            .filter(|n| n.rel_path.starts_with("05-References/") && n.rel_path.ends_with(".md") && !n.rel_path.ends_with("AGENTS.md"))
+            .cloned()
+            .collect()
+    }
 }
 
 /// Palette entries: (title, action description)
 fn palette_entries() -> Vec<(String, &'static str)> {
     vec![
-        ("Go to Memory".into(), "tab-m"),
-        ("Go to Actions".into(), "tab-a"),
-        ("Go to Calendar".into(), "tab-c"),
-        ("Go to Search".into(), "tab-s"),
-        ("Go to Tasks".into(), "tab-t"),
-        ("Go to Bookmarks".into(), "tab-b"),
+        ("Go to Home".into(), "tab-home"),
+        ("Go to Projects".into(), "tab-proj"),
+        ("Go to Memory".into(), "tab-mem"),
+        ("Go to Runbooks".into(), "tab-run"),
+        ("Go to Calendar".into(), "tab-cal"),
+        ("Go to Tasks".into(), "tab-tasks"),
+        ("Go to Bookmarks".into(), "tab-bm"),
+        ("Go to Search".into(), "tab-search"),
         ("Refresh all".into(), "R"),
         ("Quit".into(), "Q"),
     ]
@@ -149,14 +211,16 @@ fn palette_entries() -> Vec<(String, &'static str)> {
 
 fn run_palette(app: &mut App, idx: usize) {
     match idx {
-        0 => app.tab = Tab::Memory,
-        1 => app.tab = Tab::Actions,
-        2 => app.tab = Tab::Calendar,
-        3 => app.tab = Tab::Search,
-        4 => app.tab = Tab::Tasks,
-        5 => app.tab = Tab::Bookmarks,
-        6 => app.refresh(),
-        7 => std::process::exit(0),
+        0 => app.tab = Tab::Home,
+        1 => app.tab = Tab::Projects,
+        2 => app.tab = Tab::Memory,
+        3 => app.tab = Tab::Runbooks,
+        4 => app.tab = Tab::Calendar,
+        5 => app.tab = Tab::Tasks,
+        6 => app.tab = Tab::Bookmarks,
+        7 => app.tab = Tab::Search,
+        8 => app.refresh(),
+        9 => std::process::exit(0),
         _ => {}
     }
 }
@@ -238,14 +302,16 @@ fn handle_key(app: &mut App, code: KeyCode, mods: KeyModifiers) -> anyhow::Resul
             KeyCode::Char('q') | KeyCode::Char('Q') => return Ok(true),
             KeyCode::Char('c') if mods.contains(KeyModifiers::CONTROL) => return Ok(true),
             KeyCode::Char('R') if mods.is_empty() => { app.refresh(); }
-            // number tabs: 1-6
-            KeyCode::Char(n @ '1'..='6') => {
+            // number tabs: 1-8
+            KeyCode::Char(n @ '1'..='8') => {
                 let idx = (n as usize) - ('1' as usize);
                 let all = Tab::all();
                 if idx < all.len() { app.tab = all[idx]; }
             }
+            KeyCode::Char('o') => app.tab = Tab::Home,
+            KeyCode::Char('p') => app.tab = Tab::Projects,
             KeyCode::Char('m') => app.tab = Tab::Memory,
-            KeyCode::Char('a') => app.tab = Tab::Actions,
+            KeyCode::Char('a') => app.tab = Tab::Runbooks,
             KeyCode::Char('d') => app.tab = Tab::Calendar,
             KeyCode::Char('s') => app.tab = Tab::Search,
             KeyCode::Char('t') => app.tab = Tab::Tasks,
@@ -284,7 +350,7 @@ fn handle_key(app: &mut App, code: KeyCode, mods: KeyModifiers) -> anyhow::Resul
                 app.search_input.push(c);
                 app.run_search();
             }
-            KeyCode::Esc => { app.tab = Tab::Memory; }
+            KeyCode::Esc => { app.tab = Tab::Home; }
             _ => {}
         },
         Tab::Tasks => match code {
@@ -313,12 +379,12 @@ fn handle_key(app: &mut App, code: KeyCode, mods: KeyModifiers) -> anyhow::Resul
             }
             _ => {}
         },
-        Tab::Memory | Tab::Actions | Tab::Bookmarks => match code {
+        Tab::Home | Tab::Projects | Tab::Memory | Tab::Runbooks | Tab::Bookmarks => match code {
             KeyCode::Up | KeyCode::Char('k') if app.cursor > 0 => app.cursor -= 1,
             KeyCode::Down | KeyCode::Char('j') => app.cursor += 1,
             _ => {}
         },
-        Tab::Calendar => {}
+        Tab::Calendar | Tab::Search => {}
     }
     Ok(false)
 }
@@ -351,8 +417,10 @@ fn ui(f: &mut Frame, app: &mut App) {
     f.render_widget(tabs, top[1]);
 
     match app.tab {
+        Tab::Home => draw_home(f, app, top[2]),
+        Tab::Projects => draw_notes_list(f, app, top[2], &app.project_notes(), "Projects"),
         Tab::Memory => draw_memory(f, app, top[2]),
-        Tab::Actions => draw_actions(f, app, top[2]),
+        Tab::Runbooks => draw_notes_list(f, app, top[2], &app.runbook_notes(), "Runbooks"),
         Tab::Calendar => draw_calendar(f, app, top[2]),
         Tab::Search => draw_search(f, app, top[2]),
         Tab::Tasks => draw_tasks(f, app, top[2]),
@@ -376,7 +444,7 @@ fn ui(f: &mut Frame, app: &mut App) {
     );
 
     let hint = if app.notice.is_empty() {
-        "h/l switch tab · 1-6 jump · j/k move · x/⏎ complete · 0-3 task group · f all groups · R refresh · ⌘K palette · q quit".to_string()
+        "o home · h/l switch · 1-8 jump · j/k move · x/⏎ complete · 0-3 group · f all · R refresh · ⌘K palette · q quit".to_string()
     } else {
         app.notice.clone()
     };
@@ -426,6 +494,86 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: ratatui::layout::Rect) -> ra
         Constraint::Percentage((100 - percent_x) / 2),
     ])
     .split(popup_layout[1])[1]
+}
+
+fn draw_home(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
+    let today = chrono::Local::now().format("%A, %B %-d").to_string();
+    let rows = app.task_rows();
+    let top3: Vec<_> = rows.iter().filter(|(g, _)| g == "Overdue" || g == "Due this week").take(3).collect();
+    let top3: Vec<_> = if top3.len() < 3 { rows.iter().take(3).collect() } else { top3 };
+    let notes = app.helpful_notes();
+    let bms = app.resurfaced_bookmarks();
+
+    let mut lines: Vec<Line> = vec![
+        Line::from(Span::styled(format!("Today's digest — {}", today), Style::default().add_modifier(Modifier::BOLD))),
+        Line::from(""),
+    ];
+    lines.push(Line::from(Span::styled("▍ Today's 3 tasks", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))));
+    for (_, t) in &top3 {
+        let due = t.due_date().map(|d| vault::fmt_date(&d)).unwrap_or_else(|| "no due".into());
+        lines.push(Line::from(vec![
+            Span::raw("  ☐ "),
+            Span::raw(t.description.clone()),
+            Span::styled(format!("  · {} · {} · urg {:.1}", t.project, due, t.urgency), Style::default().fg(Color::DarkGray)),
+        ]));
+    }
+    if top3.is_empty() { lines.push(Line::from("  (nothing urgent — enjoy)")); }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled("▍ Helpful notes (recent, non-daily)", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))));
+    for n in notes.iter().take(4) {
+        let upd = n.updated.map(|d| d.format("%Y-%m-%d").to_string()).unwrap_or_default();
+        lines.push(Line::from(vec![
+            Span::raw("  ▸ "),
+            Span::raw(n.title.clone()),
+            Span::styled(format!("  · {} · {}", n.rel_path, upd), Style::default().fg(Color::DarkGray)),
+        ]));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled("▍ Resurfaced bookmarks (high-value, up to 3)", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))));
+    for b in &bms {
+        lines.push(Line::from(vec![
+            Span::raw("  🔖 "),
+            Span::raw(b.name.clone()),
+            Span::styled(format!("  · {} · {}", b.host, bookmarks::categorize(b)), Style::default().fg(Color::DarkGray)),
+        ]));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled("▍ Lab today (from latest daily note)", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))));
+    if let Some(d) = app.vault.daily_notes.first() {
+        lines.push(Line::from(format!("  {} — {}", d.title, d.rel_path)));
+        let _ = &d.body; // metrics live in frontmatter, parsed above
+    } else {
+        lines.push(Line::from("  (no daily notes found)"));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from("Vault timeline (latest by month):"));
+    for (month, items) in app.timeline().into_iter().take(3) {
+        lines.push(Line::from(format!("  {} — {} note(s)", month, items.len())));
+    }
+    f.render_widget(
+        Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title("Home — Daily Digest")),
+        area,
+    );
+}
+
+fn draw_notes_list(f: &mut Frame, app: &App, area: ratatui::layout::Rect, notes: &[Note], title: &str) {
+    let mut lines: Vec<Line> = vec![Line::from(Span::styled(
+        format!("{} — {} notes", title, notes.len()),
+        Style::default().add_modifier(Modifier::BOLD),
+    ))];
+    for (i, n) in notes.iter().enumerate() {
+        let cur = i == app.cursor;
+        let style = if cur { Style::default().fg(Color::Black).bg(Color::Yellow) } else { Style::default() };
+        lines.push(Line::from(vec![
+            Span::styled(if cur { "▸ " } else { "  " }, style),
+            Span::styled(n.title.clone(), style),
+            Span::styled(format!("   {} · {}", n.rel_path, n.updated.map(|d| d.format("%Y-%m-%d").to_string()).unwrap_or_default()), Style::default().fg(Color::DarkGray)),
+        ]));
+    }
+    f.render_widget(
+        Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(format!("{} — j/k · a open? · esc home", title))),
+        area,
+    );
 }
 
 fn draw_memory(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
@@ -485,25 +633,7 @@ fn draw_memory(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     );
 }
 
-fn draw_actions(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
-    // Curated: only high-signal sections — Daily/Weekly/Project checkboxes.
-    // Inbox copies and truncated "]" fragments are skipped (they pollute the list).
-    let actions = vault::all_open_actions(&app.vault);
-    let mut lines: Vec<Line> = vec![Line::from(Span::styled(
-        format!("Open checkboxes ({}) — 09-Planning, 01-Projects, 03-Learning only", actions.len()),
-        Style::default().add_modifier(Modifier::BOLD),
-    ))];
-    for (note, c) in actions.iter().take(60) {
-        lines.push(Line::from(vec![
-            Span::styled("  ☐ ", Style::default().fg(Color::Yellow)),
-            Span::raw(format!("{}  ", c.text)),
-            Span::styled(format!("→ {note}"), Style::default().fg(Color::DarkGray)),
-        ]));
-    }
-    f.render_widget(
-        Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title("Actions — j/k move · x complete")),
-        area,
-    );
+fn draw_actions(_f: &mut Frame, _app: &App, _area: ratatui::layout::Rect) {
 }
 
 fn draw_calendar(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
