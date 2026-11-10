@@ -11,9 +11,15 @@ struct BrainyApp: App {
             } detail: {
                 DetailView().environmentObject(app)
             }
-            .onAppear { app.reloadAll() }
+            .task { app.reloadAll() }
         }
         .windowToolbarStyle(.unified)
+        .commands {
+            CommandMenu("Brainy") {
+                Button("Reload vault & tasks & bookmarks") { app.reloadAll() }
+                    .keyboardShortcut("r", modifiers: .command)
+            }
+        }
     }
 }
 

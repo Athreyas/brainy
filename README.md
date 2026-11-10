@@ -18,6 +18,16 @@ the same place.
 
 ![Brainy Bookmarks](assets/brainy-bookmarks.png)
 
+## Mac app (V1)
+
+Native SwiftUI app — sidebar/detail, same vault + Taskwarrior + bookmarks data.
+
+![Brainy macOS app](assets/mac/mac-app-memory-crop.png)
+
+**Download:** [`Brainy.dmg`](assets/Brainy.dmg) (442 KB, drag the app to Applications).
+
+![Brainy combined demo](assets/brainy-combined.mp4)
+
 ## Quick start
 
 ```bash

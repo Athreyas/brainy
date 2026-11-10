@@ -20,8 +20,9 @@ final class VaultService: ObservableObject {
 
     func reload() {
         isLoading = true
+        let root = vaultRoot
         DispatchQueue.global(qos: .userInitiated).async {
-            let snap = self.load()
+            let snap = Self.loadSynchronously(root: root)
             DispatchQueue.main.async {
                 self.snapshot = snap
                 self.openActions = Self.extractActions(snap)
@@ -30,17 +31,17 @@ final class VaultService: ObservableObject {
         }
     }
 
-    private func load() -> VaultSnapshot {
+    private static func loadSynchronously(root: URL) -> VaultSnapshot {
         var snap = VaultSnapshot()
         let fm = FileManager.default
-        guard let enumerator = fm.enumerator(at: vaultRoot, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]) else {
-            error = "Could not list vault at \(vaultRoot.path)"
+        guard let enumerator = fm.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]) else {
             return snap
         }
+        let rootPath = root.path
         for case let url as URL in enumerator {
             guard url.pathExtension == "md" else { continue }
             if url.pathComponents.contains(".obsidian") || url.pathComponents.contains(".git") { continue }
-            guard let note = Self.parseNote(at: url) else { continue }
+            guard let note = parseNote(at: url, vaultRootPath: rootPath) else { continue }
             snap.notes.append(note)
         }
         snap.notes.sort { $0.path < $1.path }
@@ -53,9 +54,9 @@ final class VaultService: ObservableObject {
         return snap
     }
 
-    private static func parseNote(at url: URL) -> Note? {
+    private static func parseNote(at url: URL, vaultRootPath: String) -> Note? {
         guard let content = try? String(contentsOf: url, encoding: .utf8) else { return nil }
-        let rel = url.path.replacingOccurrences(of: VaultService.shared.vaultRoot.path + "/", with: "")
+        let rel = url.path.replacingOccurrences(of: vaultRootPath + "/", with: "")
         let folder = (rel as NSString).deletingLastPathComponent
         let (meta, body) = splitFrontmatter(content)
         let stem = url.deletingPathExtension().lastPathComponent
